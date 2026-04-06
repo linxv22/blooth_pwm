@@ -32,9 +32,12 @@ void app_main(void)
     ble_simple_start();// 初始化并启动简易 BLE 从机
 
     
+    int i = 0;
+    int count = 0;  
+    dual_motor_msg_t motor_msg = {0}; // 初始化电机控制消息结构体
 
     while (1) {
-        /*
+        
         if (i % 100 == 0) // 每100次循环执行一次
         {
             // 模拟接收一个电机控制消息，这里可以替换为实际的消息接收逻辑
@@ -51,9 +54,7 @@ void app_main(void)
         // 将电机控制消息发送到消息队列
         xQueueSend(motor_mailbox, &motor_msg, 100 / portTICK_PERIOD_MS);// 100ms 超时等待发送消息，如果发送成功则返回 pdTRUE     
         i++;
-        vTaskDelay(50 / portTICK_PERIOD_MS);
-        */
-        vTaskDelay(10000 / portTICK_PERIOD_MS); // 每1秒打印一次日志
-        ESP_LOGI(TAG, "主循环运行中...");
+        vTaskDelay(70 / portTICK_PERIOD_MS);
+        
     }
 }

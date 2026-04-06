@@ -4,6 +4,7 @@
 #include <string.h>
 #include "esp_log.h"
 #include "motor_driver.h"
+#include "adc_driver.h"
 #include "freertos/queue.h"
 
 
@@ -14,8 +15,6 @@
 #include "host/ble_hs_mbuf.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
-#include "host/ble_sm.h" 
-#include "store/config/ble_store_config.h"
 #include "host/util/util.h"
 
 
@@ -30,6 +29,7 @@ extern QueueHandle_t motor_mailbox; // 电机控制消息队列
 static uint8_t own_addr_type;// 本设备的蓝牙地址类型
 static uint8_t addr_val[6];// 存储本设备的蓝牙地址
 static uint16_t motor_chr_val_handle;// 电机控制特征的句柄
+static uint16_t batter_chr_val_handle;// 电池电量特征的句柄
 static int ble_gap_event(struct ble_gap_event *event, void *arg);
 
 /* Private functions */
@@ -88,6 +88,30 @@ static int device_write_cb(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+static int device_read_cb(uint16_t conn_handle, uint16_t attr_handle,
+                          struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    // 1. 只处理读取操作
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) 
+    {
+        return 0;
+    }
+
+    // 2. 获取电压和电流
+    float v = adc_read_voltage();
+    float i = adc_read_current();
+
+    // 格式化为字符串 "V:数值,I:数值"
+    char response_str[32];
+    snprintf(response_str, sizeof(response_str), "V:%.2f,I:%.2f", v, i);
+
+    // 3. 将字符串写入响应缓冲区
+    os_mbuf_copyinto(ctxt->om, 0, response_str, strlen(response_str));
+
+    ESP_LOGI(TAG, "✅ 电池电压读取: %.2fV, 电流读取: %.2fA", v, i);
+    return 0;
+}
+
 /* =========================================================
  * 2. GATT 服务表定义 (私有)
  * ========================================================= */
@@ -103,6 +127,12 @@ static const struct ble_gatt_svc_def gatt_svcs[] =
                 .access_cb = device_write_cb, // 写数据回调
                 .flags = BLE_GATT_CHR_F_WRITE , // 允许写
                 .val_handle = &motor_chr_val_handle, // 存储特征值句柄
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(0x1235), // 特征 UUID
+                .access_cb = device_read_cb, // 读数据回调
+                .flags = BLE_GATT_CHR_F_READ  , // 允许读
+                .val_handle = &batter_chr_val_handle, // 存储特征值句柄
             },
             {0}
         }
@@ -211,11 +241,14 @@ static void ble_host_task(void *param)
  * ========================================================= */
 static int ble_gap_event(struct ble_gap_event *event, void *arg) 
 {
-    switch (event->type) {
+    switch (event->type) 
+    {
     case BLE_GAP_EVENT_CONNECT:
-        if (event->connect.status == 0) {
-            ESP_LOGI(TAG, "✅ 手机已连接 (此时还未配对)");
-        } else {
+        if (event->connect.status == 0) 
+        {
+            ESP_LOGI(TAG, "✅ 手机已连接");
+        } else 
+        {
             ESP_LOGE(TAG, "❌ 连接失败，重连中...");
             start_advertising();
         }
@@ -226,23 +259,6 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
         start_advertising();
         break;
 
-    // ============ 新增：配对与加密事件 ============
-    case BLE_GAP_EVENT_ENC_CHANGE:
-        // 当手机同意配对，并完成加密后，会触发这里
-        if (event->enc_change.status == 0) {
-            ESP_LOGI(TAG, "🔐 链路已加密！配对成功，设备已写入账本！");
-        } else {
-            ESP_LOGE(TAG, "❌ 加密失败: %d", event->enc_change.status);
-        }
-        break;
-
-    case BLE_GAP_EVENT_REPEAT_PAIRING:
-        // 如果手机删除了配对记录又重新配对，允许覆盖旧记录
-        struct ble_gap_conn_desc desc;
-        ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc);
-        ble_store_util_delete_peer(&desc.peer_id_addr);
-        return BLE_GAP_REPEAT_PAIRING_RETRY;
-    // ==============================================
     }
     return 0;
 }
