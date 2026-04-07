@@ -103,12 +103,10 @@ static int device_read_cb(uint16_t conn_handle, uint16_t attr_handle,
 
     // 格式化为字符串 "V:数值,I:数值"
     char response_str[32];
-    snprintf(response_str, sizeof(response_str), "V:%.2f,I:%.2f", v, i);
+    snprintf(response_str, sizeof(response_str), "V:%.3f,I:%.3f", v, i);
 
     // 3. 将字符串写入响应缓冲区
-    os_mbuf_copyinto(ctxt->om, 0, response_str, strlen(response_str));
-
-    ESP_LOGI(TAG, "✅ 电池电压读取: %.2fV, 电流读取: %.2fA", v, i);
+    os_mbuf_append(ctxt->om,response_str, strlen(response_str));
     return 0;
 }
 
@@ -252,6 +250,12 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
             ESP_LOGE(TAG, "❌ 连接失败，重连中...");
             start_advertising();
         }
+
+        struct ble_gap_upd_params params = {.itvl_min = 20/1.25,//最小连接间隔为20ms，单位为1.25ms
+                                            .itvl_max = 100/1.25,//最大连接间隔为100ms，单位为1.25ms
+                                            .latency = 3,//连接从机可以跳过3次连接事件
+                                            .supervision_timeout =4};//连接监视超时为4*10ms=40ms
+        ble_gap_update_params(event->connect.conn_handle, &params);// 请求连接参数更新，优化连接性能和功耗
         break;
 
     case BLE_GAP_EVENT_DISCONNECT:

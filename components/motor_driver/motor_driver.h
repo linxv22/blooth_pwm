@@ -23,7 +23,7 @@ extern QueueHandle_t motor_mailbox; // 电机控制消息队列
 
 // 电机控制接口
 void motor_init(void);
-
+void motor_stop(void);
 #ifdef __cplusplus
 }
 #endif
