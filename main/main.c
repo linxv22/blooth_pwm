@@ -33,7 +33,7 @@ void app_main(void)
 
     
     int i = 0;
-    int count = 90;  
+    int count = -100;  
     dual_motor_msg_t motor_msg = {0}; // 初始化电机控制消息结构体
 
     while (1) {

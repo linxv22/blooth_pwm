@@ -7,10 +7,10 @@
 
 static const char *TAG = "电机";
 
-#define PWM1_IN1 GPIO_NUM_12
-#define MOTOR_IN1 GPIO_NUM_13
-#define PWM2_IN1 GPIO_NUM_15
-#define MOTOR_IN2 GPIO_NUM_16
+#define PWM1_IN1 GPIO_NUM_12 //Y4
+#define MOTOR_IN1 GPIO_NUM_13//Y3
+#define PWM2_IN1 GPIO_NUM_15 //Y1
+#define MOTOR_IN2 GPIO_NUM_16 //Y2
 
 QueueHandle_t motor_mailbox = NULL;// 电机控制消息队列
 
@@ -47,8 +47,6 @@ static void motor_task(void *pvParameters)
                     motor_stop();
                     vTaskDelay(100 / portTICK_PERIOD_MS); // 等待 100ms 确保电机完全停止
                 }
-                msg.left_power =0;
-                msg.right_power =0;
                 motor_back(msg);
                 station = 2;
             }
@@ -70,20 +68,7 @@ static void motor_task(void *pvParameters)
 
 void motor_init(void)
 {
-    // 初始化电机控制引脚为输出模式
-    gpio_config_t io_conf = 
-    {
-        .intr_type = GPIO_INTR_DISABLE,// 禁止中断
-        .mode = GPIO_MODE_OUTPUT,// 输出模式
-        .pin_bit_mask = (1ULL << MOTOR_IN1) | (1ULL << MOTOR_IN2),// 配置电机控制引脚
-        .pull_down_en = 1,// 使能下拉电阻
-        .pull_up_en = 0,// 禁用上拉电阻
-    };
-    // 调用配置函数设置 GPIO
-    gpio_config(&io_conf);
-    // 初始化电机控制引脚为低电平
-    gpio_set_level(MOTOR_IN1, 0);// 初始化电机控制引脚13为低电平
-    gpio_set_level(MOTOR_IN2, 0);// 初始化电机控制引脚16为低电平
+    
 
     ledc_timer_config_t ledc_timer = 
     {
@@ -112,6 +97,16 @@ void motor_init(void)
     ledc_channel.duty = 0; // 初始占空比为 0%
     ledc_channel_config(&ledc_channel);
 
+    ledc_channel.channel = LEDC_CHANNEL_2;
+    ledc_channel.gpio_num = MOTOR_IN1;// 选择 GPIO 13 作为 PWM 输出引脚
+    ledc_channel.duty = 0; // 初始占空比为 0%
+    ledc_channel_config(&ledc_channel);
+
+    
+    ledc_channel.channel = LEDC_CHANNEL_3;
+    ledc_channel.gpio_num = MOTOR_IN2;// 选择 GPIO 16 作为 PWM 输出引脚
+    ledc_channel.duty = 0; // 初始占空比为 0%
+    ledc_channel_config(&ledc_channel);
     ESP_LOGI(TAG, "引脚初始化完成");
 
 
@@ -124,12 +119,15 @@ void motor_init(void)
 static void motor_forward(dual_motor_msg_t msg)
 {
     // 这里可以添加电机正转的逻辑
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 , 0);// 设置占空比
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 );// 更新占空比
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 , 0);// 设置占空比
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 );// 更新占空比
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 , (msg.left_power * 1024) / 100);// 设置占空比
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 );// 更新占空比
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 , (msg.right_power * 1024) / 100);// 设置占空比
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 );// 更新占空比
-    gpio_set_level(MOTOR_IN1, 0);// 初始化电机控制引脚13为低电平
-    gpio_set_level(MOTOR_IN2, 0);// 初始化电机控制引脚16为低电平
+   
 }
 
 static void motor_back(dual_motor_msg_t msg)
@@ -139,18 +137,21 @@ static void motor_back(dual_motor_msg_t msg)
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 );// 更新占空比
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 , 0);// 设置占空比
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 );// 更新占空比
-    gpio_set_level(MOTOR_IN1, 1);// 初始化电机控制引脚13为高电平
-    gpio_set_level(MOTOR_IN2, 1);// 初始化电机控制引脚16为高电平
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 , ((100 + msg.left_power) * 1024) / 100);// 设置占空比
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 );// 更新占空比
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 , ((100 + msg.right_power) * 1024) / 100);// 设置占空比
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 );// 更新占空比
 }
 
  void motor_stop(void)
 {
     // 这里可以添加电机停止的逻辑
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 , 0);// 设置占空比为 0%
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 , 0);// 设置占空比
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 , 0);// 设置占空比为 0%
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 , 0);// 设置占空比
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 );// 更新占空比
-    gpio_set_level(MOTOR_IN1, 0);// 初始化电机控制引脚13为低电平
-    gpio_set_level(MOTOR_IN2, 0);// 初始化电机控制引脚16为低电平
-
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 , 0);// 设置占空比
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 );// 更新占空比
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 , 0);// 设置占空比
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 );// 更新占空比
 }
