@@ -33,11 +33,10 @@ void app_main(void)
 
     
     int i = 0;
-    int count = -100;  
+    int count = 90;  
     dual_motor_msg_t motor_msg = {0}; // 初始化电机控制消息结构体
 
     while (1) {
-        
         if (i % 40 == 0) // 每40次循环执行一次
         {
             // 模拟接收一个电机控制消息，这里可以替换为实际的消息接收逻辑
@@ -48,7 +47,6 @@ void app_main(void)
             if(count % 100 == 0 && count != 0) // 每当计数器达到100的倍数时重置
             {
                 count = -100; // 重置计数器
-                motor_stop(); // 停止电机
                 ESP_LOGI(TAG, "计数到100");
             }
             i =0; // 重置循环计数器
@@ -56,7 +54,7 @@ void app_main(void)
         // 将电机控制消息发送到消息队列
         xQueueSend(motor_mailbox, &motor_msg, 100 / portTICK_PERIOD_MS);// 100ms 超时等待发送消息，如果发送成功则返回 pdTRUE     
         i++;
-        vTaskDelay(70 / portTICK_PERIOD_MS);
+        vTaskDelay(100 / portTICK_PERIOD_MS);
         
     }
 }

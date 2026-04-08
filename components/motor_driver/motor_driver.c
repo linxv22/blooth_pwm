@@ -17,35 +17,51 @@ QueueHandle_t motor_mailbox = NULL;// 电机控制消息队列
 static void motor_forward(dual_motor_msg_t msg);
 static void motor_back(dual_motor_msg_t msg);
 
-static void motor_control(dual_motor_msg_t msg)
-{
-    if(msg.left_power > 0 && msg.right_power > 0) 
-        motor_forward(msg);
-    else if(msg.left_power < 0 && msg.right_power < 0)
-    {
 
-        motor_stop();
-        motor_back(msg);
-    }
-    else
-        motor_stop();
-}
 
 
 static void motor_task(void *pvParameters)
 {
     
     dual_motor_msg_t msg;
+    int station = 0; // 0: 停止, 1: 前进, 2: 后退
     while (1)
     {
         if (xQueueReceive(motor_mailbox, &msg, 150 / portTICK_PERIOD_MS) == pdTRUE)
         // 150ms 超时等待接收消息，如果接收到消息则返回 pdTRUE 
         {
-            motor_control(msg); // 根据接收到的消息控制电机
+            if(msg.left_power > 0 && msg.right_power > 0) 
+            {
+                if(station == 2) // 如果当前状态是后退，先停止电机
+                {
+                    motor_stop();
+                    vTaskDelay(100 / portTICK_PERIOD_MS); // 等待 100ms 确保电机完全停止
+                }
+                motor_forward(msg);
+                station = 1;
+            }
+            else if(msg.left_power < 0 && msg.right_power < 0)
+            {
+                if(station == 1) // 如果当前状态是前进，先停止电机
+                {
+                    motor_stop();
+                    vTaskDelay(100 / portTICK_PERIOD_MS); // 等待 100ms 确保电机完全停止
+                }
+                msg.left_power =0;
+                msg.right_power =0;
+                motor_back(msg);
+                station = 2;
+            }
+            else
+            {
+                motor_stop();
+                station = 0;
+            }
         }
         else 
         {
             motor_stop(); // 如果没有接收到消息，停止电机
+            station = 0;
         }
     }
 }
@@ -118,10 +134,10 @@ static void motor_forward(dual_motor_msg_t msg)
 
 static void motor_back(dual_motor_msg_t msg)
 {
-    // 这里可以添加电机反转的逻辑
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 , ((100 + msg.left_power) * 1024) / 100);// 设置占空比
+    
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 , 0);// 设置占空比
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 , ((100 + msg.right_power) * 1024) / 100);// 设置占空比
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 , 0);// 设置占空比
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 );// 更新占空比
     gpio_set_level(MOTOR_IN1, 1);// 初始化电机控制引脚13为高电平
     gpio_set_level(MOTOR_IN2, 1);// 初始化电机控制引脚16为高电平
