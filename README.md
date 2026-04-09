@@ -2,18 +2,20 @@
 
 ## 功能概览
 
-- 使用 NimBLE 作为 BLE 从机，广播设备名 ESP32-S3-TEST，支持掉线后自动重连广播。
-- 暴露 1 个自定义主服务 (UUID 0xABCD) 与 1 个特征 (UUID 0x1234)，特征强制加密写入。
+- 使用 NimBLE 作为 BLE 从机，广播设备名 `ESP32_BLE`，支持掉线后自动重连广播。
+- 暴露 1 个自定义主服务 (UUID 0xABCD) 与 2 个特征：
+  - UUID 0x1234（写）：接收电机控制指令。
+  - UUID 0x1235（读）：返回当前电压与电流（格式 `V:x.xxx,I:x.xxx`）。
 - 接收手机下发的 4 字节电机控制帧，解析后写入电机消息队列，自动裁剪到 -100~100。
-- 采用 Just Works 配对并启用 Bonding，重复配对会覆盖旧记录。
 - 断开连接后自动恢复广播。
 
 ## 代码结构
 
-- [main/main.c](main/main.c)：初始化 NVS、motor_driver、adc_driver，启动 BLE 从机并进入主循环日志。
-- [components/ble_server/ble_server.c](components/ble_server/ble_server.c)：配置 NimBLE、服务/特征、配对策略；处理写回调并推送电机控制消息。
-- [components/ble_server/ble_server.h](components/ble_server/ble_server.h)：对外暴露 `ble_simple_start()`。
-- motor_driver/adc_driver：电机控制与 ADC 采样，提供 `motor_mailbox` 队列供 BLE 写回调投递。
+- [main/main.c](main/main.c)：初始化 NVS、motor_driver、adc_driver，启动 BLE 从机并进入主循环。
+- [components/ble_server/ble_server.c](components/ble_server/ble_server.c)：配置 NimBLE、GATT 服务/特征；处理写回调并推送电机控制消息，处理读回调返回 ADC 数据。
+- [components/ble_server/ble_server.h](components/ble_server/ble_server.h)：对外暴露 `ble_simple_start()`，以及设备名宏 `DEVICE_NAME`。
+- [components/motor_driver/motor_driver.c](components/motor_driver/motor_driver.c)：LEDC PWM 电机驱动，4 路通道分别控制左右电机的正反转；提供 `motor_mailbox` 队列供 BLE 写回调投递。
+- [components/adc_driver/adc_driver.c](components/adc_driver/adc_driver.c)：ADC 采样，提供 `adc_read_voltage()` 与 `adc_read_current()`。
 
 ## 指令协议（手机写特征 0x1234）
 
@@ -27,7 +29,7 @@
 规则：
 - 仅接受长度恰好 4 字节的写入，长度错误返回 Invalid Attribute Value Length。
 - 帧头/帧尾不符直接拒绝；合法帧被裁剪到 -100~100 后覆盖写入 `motor_mailbox`。
-- 写操作要求已配对加密，否则手机写入会失败。
+- 正值前进（LEDC_CHANNEL_0/1 输出 PWM），负值后退（LEDC_CHANNEL_2/3 输出 PWM），零停止。
 
 ## 使用方法
 
@@ -40,147 +42,57 @@
 ## 手机连接与测试步骤
 
 - 打开手机蓝牙，使用 LightBlue（iOS）或 nRF Connect / BLE Scanner（Android）。
-- 扫描并连接设备名称 ESP32-S3-TEST；首次连接按提示完成配对。
-- 进入自定义主服务 UUID 0xABCD，找到特征 UUID 0x1234（写）。
-- 写入示例帧：A5 32 32 5A（左右功率 +50）。断开后设备会重新广播。
-
-## 常见问题与排查
-
-- 无法写入：确认已配对并处于加密链路；写入长度必须是 4 字节。
-- 电机不动：检查帧头/帧尾是否 A5/5A，功率是否在 -100~100 范围；查看串口日志是否收到 “帧正确” 记录。
-- 重新配对：若手机删除配对记录，重新连接会自动覆盖旧绑定；若仍失败，可在手机端先忘记设备再连接。
-
-## 后续可扩展方向
-
-- 添加 Notify 特征回传电机状态/电池电量。
-- 增加命令校验或 CRC，提升抗误写能力。
-- 把设备名和 UUID 抽到配置项，便于量产修改。
-- 优化广播/功耗策略，增加休眠唤醒逻辑。
-
-## 功能介绍
-
-这个项目实现了一个ESP32 BLE（低功耗蓝牙）服务器，支持：
-- ✅ 蓝牙广告与连接管理
-- ✅ GATT服务与特征定义
-- ✅ 接收手机客户端的指令
-- ✅ 向手机客户端发送消息
-- ✅ 连接状态监测
+- 扫描并连接设备名称 `ESP32_BLE`。
+- 进入自定义主服务 UUID 0xABCD：
+  - 找到特征 UUID 0x1234（写），写入电机控制帧，例如 `A5 32 32 5A`（左右功率 +50）。
+  - 找到特征 UUID 0x1235（读），读取当前电压与电流字符串。
+- 断开后设备会重新广播。
 
 ## 文件说明
 
 ### ble_server.h
-蓝牙服务器的头文件，定义了公共接口：
-- `ble_server_init()` - 初始化BLE服务器
-- `ble_send_data()` - 发送数据给客户端
-- `ble_is_connected()` - 检查连接状态
+蓝牙服务器的头文件，定义了公共接口与宏：
+- `DEVICE_NAME` — 广播设备名（默认 `"ESP32_BLE"`）
+- `ble_simple_start()` — 初始化并启动 BLE 从机
 
 ### ble_server.c
 蓝牙服务器的核心实现：
-- GATT服务定义（UUID: 0x181A）
-- 两个GATT特征：
-  - RX特征 (0x2A99)：用于接收客户端的数据
-  - TX特征 (0x2A9A)：用于发送数据给客户端
-- GAP事件处理（连接、断开连接）
-- NimBLE协议栈初始化
+- GATT 服务定义（UUID: 0xABCD），包含两个特征：
+  - 写特征 (0x1234)：`device_write_cb` 接收 4 字节电机帧并推送至 `motor_mailbox`
+  - 读特征 (0x1235)：`device_read_cb` 通过 `adc_read_voltage()` / `adc_read_current()` 返回电压电流字符串
+- GAP 事件处理（连接、断开并自动重新广播）
+- NimBLE 协议栈初始化与主机任务
+
+### motor_driver.c / motor_driver.h
+电机驱动实现：
+- 4 路 LEDC 通道（LEDC_CHANNEL_0~3）分别对应 GPIO 12/15（前进 PWM）和 GPIO 13/16（后退 PWM）
+- `motor_init()` — 初始化 PWM 定时器、通道及 `motor_mailbox` 队列，启动 `motor_task`
+- `motor_stop()` — 将全部通道占空比清零
+- `motor_task` 监听 `motor_mailbox`，150 ms 无消息则自动停车；切换正反转前先停止再延时 100 ms
+- 反转占空比计算：输入范围 -100~-1，公式 `(100 + power) * 1024 / 100` 将 power=-100 映射到占空比 0（停止）、power=-1 映射到约 1023（全速）；已修复此前反转无法调速的 bug
+
+### adc_driver.c / adc_driver.h
+ADC 采样：
+- `adc_init()` — 初始化 ADC
+- `adc_read_voltage()` — 读取电压（单位 V，返回 `float`）
+- `adc_read_current()` — 读取电流（单位 A，返回 `float`）
 
 ### main.c
 主应用程序：
-- 初始化BLE服务器
-- 创建命令处理任务
-- 定期向客户端发送测试消息
+- 依次初始化 NVS、`motor_driver`、`adc_driver`、BLE 从机
+- 主循环模拟电机功率在 -100~100 之间步进变化，用于调试验证
 
-## 使用方式
+## 常见问题与排查
 
-### 1. 配置和编译
-```bash
-# 进行菜单配置（可选，已预配置）
-idf.py menuconfig
+- 无法写入：写入长度必须是 4 字节，且帧头/帧尾必须为 0xA5/0x5A。
+- 电机不动：检查串口日志是否收到 "✅ 帧正确" 记录；确认功率值不为 0。
+- 反转后无法调速：已在 `motor_back()` 中修复，反转占空比计算公式改为 `(100 + power) * 1024 / 100`。
+- 设备名修改：编辑 `components/ble_server/ble_server.h` 中的 `DEVICE_NAME` 宏。
 
-# 编译项目
-idf.py build
-```
-
-### 2. 烧录固件
-```bash
-idf.py flash monitor
-```
-
-### 3. 手机连接
-- 打开手机蓝牙设置
-- 搜索设备 "ESP32_BLE_Server"
-- 连接设备
-- 查看数据发送/接收（使用支持BLE的APP）
-
-## 修改指令与消息处理
-
-### 接收客户端的指令
-
-编辑 `ble_server.c` 中的 `ble_char_rx_write_callback` 函数：
-
-```c
-static int
-ble_char_rx_write_callback(uint16_t conn_handle, uint16_t attr_handle,
-                           struct ble_gatt_access_ctxt *ctxt, void *arg)
-{
-    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        memcpy(rx_buffer, ctxt->om->om_data, ctxt->om->om_len);
-        rx_buffer_len = ctxt->om->om_len;
-        
-        ESP_LOGI(TAG, "接收数据: %s", rx_buffer);
-        
-        // 在这里添加你的指令处理逻辑
-        // 例如：控制LED、PWM等
-        if (strstr((char *)rx_buffer, "LED_ON")) {
-            // 打开LED的代码
-            ESP_LOGI(TAG, "执行: 打开LED");
-        } else if (strstr((char *)rx_buffer, "LED_OFF")) {
-            // 关闭LED的代码
-            ESP_LOGI(TAG, "执行: 关闭LED");
-        }
-    }
-    return 0;
-}
-```
-
-### 发送自定义消息
-
-在 `main.c` 或其他地方调用：
-
-```c
-uint8_t message[] = "ESP32: Hello Phone";
-ble_send_data(message, strlen((char *)message));
-```
-
-## 常见问题
-
-### Q: 如何修改设备名称？
-A: 编辑 `ble_server.c` 第 162 行：
-```c
-ble_svc_gap_device_name_set("YOUR_DEVICE_NAME");
-```
-
-### Q: 如何添加更多GATT特征？
-A: 在 `ble_server.c` 中的 `gatt_svcs` 数组中添加新的特征定义:
-```c
-{
-    .uuid = BLE_UUID16_DECLARE(0x2A9B),  // 新特征UUID
-    .access_cb = ble_gatt_access_callback,
-    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
-},
-```
-
-### Q: 如何增加传输速率？
-A: 在 `ble_command_task` 中调整发送间隔：
-```c
-vTaskDelay(pdMS_TO_TICKS(1000));  // 改为1秒发送一次
-```
-
-## 推荐的手机APP
+## 推荐的手机 APP
 
 - **iOS**: LightBlue
 - **Android**: nRF Connect 或 BLE Scanner
-
-这些APP可以显示BLE设备，读写特征值，监测连接状态。
 
 ## 技术架构
 
@@ -188,25 +100,28 @@ vTaskDelay(pdMS_TO_TICKS(1000));  // 改为1秒发送一次
 ┌─────────────────────────────────┐
 │      手机蓝牙客户端              │
 └────────────────┬────────────────┘
-                 │ BLE
+                 │ BLE (NimBLE)
 ┌────────────────▼────────────────┐
-│      ESP32 BLE 服务器            │
+│      ESP32-S3 BLE 服务器         │
 │  ┌──────────────────────────┐   │
-│  │   NimBLE 协议栈          │   │
+│  │   GAP (广告 / 连接管理)  │   │
 │  ├──────────────────────────┤   │
-│  │   GAP (广告, 连接)       │   │
+│  │   GATT 主服务 0xABCD     │   │
+│  │   ├ 写特征 0x1234        │   │
+│  │   └ 读特征 0x1235        │   │
 │  ├──────────────────────────┤   │
-│  │   GATT (服务, 特征)      │   │
+│  │   motor_driver (LEDC)    │   │
 │  ├──────────────────────────┤   │
-│  │   Command Handler        │   │
+│  │   adc_driver             │   │
 │  └──────────────────────────┘   │
 └─────────────────────────────────┘
 ```
 
-## 下一步改进
+## 后续可扩展方向
 
-- [ ] 添加更多GATT特征以支持不同功能
-- [ ] 实现安全配对机制
-- [ ] 添加OTA固件升级功能
-- [ ] 优化功耗管理
-- [ ] 增加错误处理和恢复机制
+- 增加命令校验或 CRC，提升抗误写能力。
+- 添加 Notify 特征主动推送电机状态 / 电池电量。
+- 把设备名和 UUID 抽到 `menuconfig` 配置项，便于量产修改。
+- 实现安全配对（Just Works / Passkey），保护写特征访问。
+- 优化广播/功耗策略，增加休眠唤醒逻辑。
+- 添加 OTA 固件升级功能。
