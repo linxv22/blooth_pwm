@@ -14,52 +14,106 @@ static const char *TAG = "电机";
 
 QueueHandle_t motor_mailbox = NULL;// 电机控制消息队列
 
-static void motor_forward(dual_motor_msg_t msg);
-static void motor_back(dual_motor_msg_t msg);
-
-
-
+void motor_stop(void)
+{
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 , 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 );
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 , 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 );
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 , 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 );
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 , 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 );
+}
 
 static void motor_task(void *pvParameters)
 {
-    
-    dual_motor_msg_t msg;
-    int station = 0; // 0: 停止, 1: 前进, 2: 后退
+    dual_motor_msg_t msg = 
+    {
+        .left_power = 0,
+        .right_power = 0
+    }; // 用于接收电机控制消息的结构体
+    int left_station = 0; // 0: 停止, 1: 前进, 2: 后退
+    int right_station = 0; // 0: 停止, 1: 前进, 2: 后退
+    int new_left_station = 0, new_right_station = 0; // 用于存储新的电机状态
+    bool need_delay = false; // 是否需要在正反转切换时添加延时
+    motor_stop(); // 确保电机初始状态为停止
     while (1)
     {
-        if (xQueueReceive(motor_mailbox, &msg, 150 / portTICK_PERIOD_MS) == pdTRUE)
-        // 150ms 超时等待接收消息，如果接收到消息则返回 pdTRUE 
+        if (xQueueReceive(motor_mailbox, &msg, 200 / portTICK_PERIOD_MS) == pdTRUE)
         {
-            if(msg.left_power > 0 && msg.right_power > 0) 
-            {
-                if(station == 2) // 如果当前状态是后退，先停止电机
-                {
-                    motor_stop();
-                    vTaskDelay(100 / portTICK_PERIOD_MS); // 等待 100ms 确保电机完全停止
-                }
-                motor_forward(msg);
-                station = 1;
+            new_left_station = (msg.left_power > 0) ? 1 : ((msg.left_power < 0) ? 2 : 0);
+            new_right_station = (msg.right_power > 0) ? 1 : ((msg.right_power < 0) ? 2 : 0);
+
+            need_delay = false;
+            // 检查左电机是否在正反转切换
+            if (new_left_station != left_station && left_station != 0 && new_left_station != 0) {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
+                need_delay = true;
             }
-            else if(msg.left_power < 0 && msg.right_power < 0)
-            {
-                if(station == 1) // 如果当前状态是前进，先停止电机
-                {
-                    motor_stop();
-                    vTaskDelay(100 / portTICK_PERIOD_MS); // 等待 100ms 确保电机完全停止
-                }
-                motor_back(msg);
-                station = 2;
+            // 检查右电机是否在正反转切换
+            if (new_right_station != right_station && right_station != 0 && new_right_station != 0) {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
+                need_delay = true;
             }
-            else
-            {
-                motor_stop();
-                station = 0;
+
+            if (need_delay) { // 等待 10ms 确保电机完全停止，避免烧毁电机驱动
+                vTaskDelay(10 / portTICK_PERIOD_MS);
+            }
+
+            left_station = new_left_station;
+            right_station = new_right_station;
+
+            // 设置左电机
+            if (msg.left_power > 0) {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, (msg.left_power * 1024) / 100);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            } else if (msg.left_power < 0) {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, (-msg.left_power * 1024) / 100);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
+            } else {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
+            }
+
+            // 设置右电机
+            if (msg.right_power > 0) {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, (msg.right_power * 1024) / 100);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
+            } else if (msg.right_power < 0) {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, (-msg.right_power * 1024) / 100);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+            } else {
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, 0);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
             }
         }
         else 
         {
-            motor_stop(); // 如果没有接收到消息，停止电机
-            station = 0;
+            if (left_station != 0 || right_station != 0)
+            {
+                motor_stop(); // 如果没有接收到消息，停止电机
+                left_station = 0;
+                right_station = 0;
+            }
         }
     }
 }
@@ -114,44 +168,4 @@ void motor_init(void)
     // 创建一个 FreeRTOS 任务来控制电机
     xTaskCreate(motor_task, "motor_task", 2048, NULL, configMAX_PRIORITIES-1, NULL);
     
-}
-
-static void motor_forward(dual_motor_msg_t msg)
-{
-    // 这里可以添加电机正转的逻辑
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 , 0);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 , 0);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 , (msg.left_power * 1024) / 100);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 , (msg.right_power * 1024) / 100);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 );// 更新占空比
-   
-}
-
-static void motor_back(dual_motor_msg_t msg)
-{
-    
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 , 0);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 , 0);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 , ((100 + msg.left_power) * 1024) / 100);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 , ((100 + msg.right_power) * 1024) / 100);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 );// 更新占空比
-}
-
- void motor_stop(void)
-{
-    // 这里可以添加电机停止的逻辑
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 , 0);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 , 0);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 , 0);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2 );// 更新占空比
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 , 0);// 设置占空比
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3 );// 更新占空比
 }
