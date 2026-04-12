@@ -16,7 +16,10 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 #include "host/util/util.h"
-
+/*ota 核心头文件*/
+#include "esp_ota_ops.h"
+#include "esp_system.h"
+#include "esp_partition.h"
 
 extern QueueHandle_t motor_mailbox; // 电机控制消息队列
 
@@ -31,6 +34,11 @@ static uint8_t addr_val[6];// 存储本设备的蓝牙地址
 static uint16_t motor_chr_val_handle;// 电机控制特征的句柄
 static uint16_t batter_chr_val_handle;// 电池电量特征的句柄
 static int ble_gap_event(struct ble_gap_event *event, void *arg);
+//ota 相关变量
+static esp_ota_handle_t ota_handle = 0;              // OTA句柄
+static const esp_partition_t *update_partition = NULL; // 准备写入的目标分区
+static bool is_ota_updating = false;                 // OTA 状态标志位
+static uint32_t total_received = 0;                  // 已累计接收的字节数
 
 /* Private functions */
 inline static void format_addr(char *addr_str, uint8_t addr[]) {
@@ -88,6 +96,7 @@ static int device_write_cb(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+// 蓝牙读数据回调 电池电量特征被读取时会调用这个函数
 static int device_read_cb(uint16_t conn_handle, uint16_t attr_handle,
                           struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -110,6 +119,129 @@ static int device_read_cb(uint16_t conn_handle, uint16_t attr_handle,
     return 0;
 }
 
+// OTA 控制特征写数据回调 (专门处理 START 0x01 和 END 0x02)
+static int ota_ctrl_cb(uint16_t conn_handle, uint16_t attr_handle,
+                       struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return 0;
+    }
+
+    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    if (len < 1) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+
+    uint8_t cmd_buf[16];
+    os_mbuf_copydata(ctxt->om, 0, len > sizeof(cmd_buf) ? sizeof(cmd_buf) : len, cmd_buf);
+    uint8_t cmd = cmd_buf[0];
+
+    if (cmd == 0x01) { // 收到 START 命令
+        if (is_ota_updating) {
+            ESP_LOGW(TAG, "OTA 已经在进行中...");
+            return 0; // 忽略重复启动
+        }
+        ESP_LOGI(TAG, "===> 收到 OTA START 指令 <===");
+
+        // 1. 查找下一个空闲的 OTA 分区
+        update_partition = esp_ota_get_next_update_partition(NULL);
+        if (update_partition == NULL) {
+            ESP_LOGE(TAG, "找不到空闲的 OTA 分区！请检查分区表。");
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        ESP_LOGI(TAG, "目标分区: %s, 大小: %lu 字节", update_partition->label, update_partition->size);
+
+        // 2. 开启 OTA 通道，准备连续写入
+        esp_err_t err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_begin 失败 (%s)", esp_err_to_name(err));
+            esp_ota_abort(ota_handle);
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+
+        is_ota_updating = true;
+        total_received = 0;
+        ESP_LOGI(TAG, "OTA 通道已开启，等待接收固件数据...");
+    } 
+    else if (cmd == 0x02) { // 收到 END 命令
+        if (!is_ota_updating) {
+            ESP_LOGW(TAG, "收到 OTA END，但当前并未处于更新状态");
+            return 0;
+        }
+        ESP_LOGI(TAG, "===> 收到 OTA END 指令，准备校验重启 <===");
+        
+        is_ota_updating = false;
+
+        // 1. 结束写入并计算校验和
+        esp_err_t err = esp_ota_end(ota_handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "OTA 结束校验失败 (%s) 固件可能不完整", esp_err_to_name(err));
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+
+        // 2. 将下一次启动分区指向我们刚写好的这个分区
+        err = esp_ota_set_boot_partition(update_partition);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "设置启动分区失败 (%s)", esp_err_to_name(err));
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+
+        ESP_LOGI(TAG, "✅ OTA 成功！收到总字节数: %lu，设备将在 5 秒后重启...", total_received);
+        
+        // 延时一下以便把日志打印完，顺便让 BLE 正常回复底层包
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        esp_restart(); // ====== 重点：重启生效！ ======
+    }
+    else {
+        ESP_LOGW(TAG, "未知 OTA 控制命令: 0x%02X", cmd);
+    }
+    return 0;
+}
+
+// OTA 数据特征写数据回调 (疯狂接收源源不断的 bin 文件片段)
+static int ota_data_cb(uint16_t conn_handle, uint16_t attr_handle,
+                       struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return 0;
+    }
+
+    if (!is_ota_updating) {
+        ESP_LOGW(TAG, "拒收数据：尚未开启 OTA 状态 (未收到 START)");
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    uint8_t buffer[256]; 
+
+    if (len > sizeof(buffer)) { // 保护栈溢出
+        ESP_LOGE(TAG, "单次数据包超长: %u 限定: %u", len, sizeof(buffer));
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+
+    // 1. 从 BLE 底层链表结构拷贝出数据
+    os_mbuf_copydata(ctxt->om, 0, len, buffer);
+
+    // 2. 将数据切片写入 Flash
+    esp_err_t err = esp_ota_write(ota_handle, (const void *)buffer, len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "写入 Flash 失败: %s", esp_err_to_name(err));
+        esp_ota_abort(ota_handle);
+        is_ota_updating = false;
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    // 3. 累加进度
+    total_received += len;
+    
+    // (可选) 每收到约 10KB 打印一次进度，避免满屏被日志刷爆拖慢速度
+    if (total_received % 10240 < len) {
+        ESP_LOGI(TAG, "OTA 接收进度: %lu Bytes", total_received);
+    }
+
+    return 0;
+}
+
 /* =========================================================
  * 2. GATT 服务表定义 (私有)
  * ========================================================= */
@@ -123,7 +255,7 @@ static const struct ble_gatt_svc_def gatt_svcs[] =
             {
                 .uuid = BLE_UUID16_DECLARE(0x1234), // 特征 UUID
                 .access_cb = device_write_cb, // 写数据回调
-                .flags = BLE_GATT_CHR_F_WRITE , // 允许写
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP, // 允许写和无响应写
                 .val_handle = &motor_chr_val_handle, // 存储特征值句柄
             },
             {
@@ -131,6 +263,24 @@ static const struct ble_gatt_svc_def gatt_svcs[] =
                 .access_cb = device_read_cb, // 读数据回调
                 .flags = BLE_GATT_CHR_F_READ  , // 允许读
                 .val_handle = &batter_chr_val_handle, // 存储特征值句柄
+            },
+            {0}
+        }
+    },
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY, // 主服务
+        .uuid = BLE_UUID16_DECLARE(0xA000), // OTA 服务 UUID
+        .characteristics = (struct ble_gatt_chr_def[])
+        {
+            {
+                .uuid = BLE_UUID16_DECLARE(0xA001), // OTA 特征 UUID
+                .access_cb = ota_ctrl_cb, // 写数据回调
+                .flags = BLE_GATT_CHR_F_WRITE  , // 允许写
+            },
+            {
+                .uuid = BLE_UUID16_DECLARE(0xA002), // OTA 特征 UUID
+                .access_cb = ota_data_cb, // 写数据回调
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP, // 允许写和无响应写
             },
             {0}
         }
@@ -198,8 +348,8 @@ static void start_advertising(void)
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
 
     /* Set advertising interval */
-    adv_params.itvl_min = BLE_GAP_ADV_ITVL_MS(500);
-    adv_params.itvl_max = BLE_GAP_ADV_ITVL_MS(510);
+    adv_params.itvl_min = BLE_GAP_ADV_ITVL_MS(300);
+    adv_params.itvl_max = BLE_GAP_ADV_ITVL_MS(310);
 
     /* Start advertising */
     rc = ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER, &adv_params,
@@ -254,7 +404,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
         struct ble_gap_upd_params params = {.itvl_min = 20/1.25,//最小连接间隔为20ms，单位为1.25ms
                                             .itvl_max = 100/1.25,//最大连接间隔为100ms，单位为1.25ms
                                             .latency = 3,//连接从机可以跳过3次连接事件
-                                            .supervision_timeout =4};//连接监视超时为4*10ms=40ms
+                                            .supervision_timeout =200};//连接监视超时为4*10ms=40ms
         ble_gap_update_params(event->connect.conn_handle, &params);// 请求连接参数更新，优化连接性能和功耗
         break;
 

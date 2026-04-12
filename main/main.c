@@ -32,9 +32,9 @@ void app_main(void)
     ble_simple_start();// 初始化并启动简易 BLE 从机
 
     
-    int i = 0;
-    int count = -100;  
-    dual_motor_msg_t motor_msg = {0}; // 初始化电机控制消息结构体
+    // int i = 0;
+    // int count = -100;  
+    // dual_motor_msg_t motor_msg = {0}; // 初始化电机控制消息结构体
 
     while (1) {
         // if (i % 40 == 0) // 每40次循环执行一次
@@ -54,7 +54,8 @@ void app_main(void)
         // // 将电机控制消息发送到消息队列
         // xQueueSend(motor_mailbox, &motor_msg, 100 / portTICK_PERIOD_MS);// 100ms 超时等待发送消息，如果发送成功则返回 pdTRUE     
         // i++;
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
+        ESP_LOGI(TAG, "==== 应用程序启动 OTA 更新成功2！ ====");
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
         
     }
 }

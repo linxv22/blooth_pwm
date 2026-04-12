@@ -1,3 +1,3 @@
 idf_component_register(SRCS "motor_driver.c"
                        INCLUDE_DIRS "."
-                       REQUIRES driver adc_driver)
+                       REQUIRES esp_driver_ledc esp_driver_gpio adc_driver)
