@@ -71,15 +71,15 @@ static void motor_task(void *pvParameters)
             right_station = new_right_station;
 
             // 设置左电机
-            if (msg.left_power > 0) {
+            if (msg.left_power < 0) {
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, 0);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, (msg.left_power * 1024) / 100);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, (-msg.left_power * 1024) / 100);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-            } else if (msg.left_power < 0) {
+            } else if (msg.left_power > 0) {
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, (-msg.left_power * 1024) / 100);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, (msg.left_power * 1024) / 100);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
             } else {
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
@@ -89,15 +89,15 @@ static void motor_task(void *pvParameters)
             }
 
             // 设置右电机
-            if (msg.right_power > 0) {
+            if (msg.right_power < 0) {
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, (msg.right_power * 1024) / 100);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, (-msg.right_power * 1024) / 100);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
-            } else if (msg.right_power < 0) {
+            } else if (msg.right_power > 0) {
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, 0);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
-                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, (-msg.right_power * 1024) / 100);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, (msg.right_power * 1024) / 100);
                 ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
             } else {
                 ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);

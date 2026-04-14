@@ -187,9 +187,20 @@ static int ota_ctrl_cb(uint16_t conn_handle, uint16_t attr_handle,
         }
 
         ESP_LOGI(TAG, "✅ OTA 成功！收到总字节数: %lu，设备将在 5 秒后重启...", total_received);
-        
         // 延时一下以便把日志打印完，顺便让 BLE 正常回复底层包
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "✅ OTA 成功！收到总字节数: %lu，设备将在 4 秒后重启...", total_received);
+        // 延时一下以便把日志打印完，顺便让 BLE 正常回复底层包
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "✅ OTA 成功！收到总字节数: %lu，设备将在 3 秒后重启...", total_received);
+        // 延时一下以便把日志打印完，顺便让 BLE 正常回复底层包
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "✅ OTA 成功！收到总字节数: %lu，设备将在 2 秒后重启...", total_received);
+        // 延时一下以便把日志打印完，顺便让 BLE 正常回复底层包
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "✅ OTA 成功！收到总字节数: %lu，设备将在 1 秒后重启...", total_received);
+        // 延时一下以便把日志打印完，顺便让 BLE 正常回复底层包
+        vTaskDelay(pdMS_TO_TICKS(1000));
         esp_restart(); // ====== 重点：重启生效！ ======
     }
     else {
@@ -404,7 +415,7 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
         struct ble_gap_upd_params params = {.itvl_min = 20/1.25,//最小连接间隔为20ms，单位为1.25ms
                                             .itvl_max = 100/1.25,//最大连接间隔为100ms，单位为1.25ms
                                             .latency = 3,//连接从机可以跳过3次连接事件
-                                            .supervision_timeout =200};//连接监视超时为4*10ms=40ms
+                                            .supervision_timeout =200};//连接监视超时为2000ms，单位为10ms
         ble_gap_update_params(event->connect.conn_handle, &params);// 请求连接参数更新，优化连接性能和功耗
         break;
 

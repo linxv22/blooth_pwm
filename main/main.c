@@ -31,6 +31,7 @@ void app_main(void)
     adc_init();// 初始化 ADC 采样
     ble_simple_start();// 初始化并启动简易 BLE 从机
 
+    ESP_LOGI(TAG, "==== 应用程序启动 OTA 更新成功4.14.442 ====");
     
     // int i = 0;
     // int count = -100;  
@@ -54,8 +55,8 @@ void app_main(void)
         // // 将电机控制消息发送到消息队列
         // xQueueSend(motor_mailbox, &motor_msg, 100 / portTICK_PERIOD_MS);// 100ms 超时等待发送消息，如果发送成功则返回 pdTRUE     
         // i++;
-        ESP_LOGI(TAG, "==== 应用程序启动 OTA 更新成功2！ ====");
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
+      
+        vTaskDelay(10000 / portTICK_PERIOD_MS);
         
     }
 }
